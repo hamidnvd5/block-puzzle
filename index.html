@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Block Puzzle</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #1b1f2a;
+    font-family: Arial, Helvetica, sans-serif;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+  }
+  #app {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    padding: 10px;
+  }
+  #topbar {
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: #fff;
+    margin-bottom: 10px;
+  }
+  #score-box {
+    background: #262b3a;
+    border-radius: 12px;
+    padding: 8px 18px;
+    text-align: center;
+  }
+  #score-box .label { font-size: 12px; color: #9aa0b4; }
+  #score-box .value { font-size: 22px; font-weight: bold; }
+  #best-box { text-align: left; color: #9aa0b4; font-size: 13px; }
+
+  #board {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    grid-template-rows: repeat(8, 1fr);
+    width: min(92vw, 420px);
+    height: min(92vw, 420px);
+    background: #262b3a;
+    border-radius: 10px;
+    padding: 6px;
+    gap: 3px;
+    position: relative;
+  }
+  .cell {
+    background: #323848;
+    border-radius: 4px;
+  }
+  .cell.filled {
+    border-radius: 6px;
+  }
+
+  #tray {
+    width: min(92vw, 420px);
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    margin-top: 16px;
+    height: 110px;
+  }
+  .piece-slot {
+    display: grid;
+    gap: 3px;
+    touch-action: none;
+  }
+  .piece-cell {
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+  }
+  .piece-cell.empty { background: transparent; }
+
+  #overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    color: #fff;
+    z-index: 50;
+    text-align: center;
+  }
+  #overlay h1 { font-size: 28px; margin-bottom: 6px; }
+  #overlay p { color: #cfd3e0; margin-top: 0; }
+  #overlay button {
+    margin-top: 16px;
+    padding: 10px 26px;
+    font-size: 16px;
+    background: #4d7cff;
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    cursor: pointer;
+  }
+  .dragging {
+    position: fixed;
+    pointer-events: none;
+    z-index: 100;
+    opacity: 0.9;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <div id="best-box">أفضل نتيجة<br><span id="best-value">0</span></div>
+    <div id="score-box">
+      <div class="label">النقط</div>
+      <div class="value" id="score-value">0</div>
+    </div>
+    <div style="width:60px"></div>
+  </div>
+
+  <div id="board"></div>
+
+  <div id="tray">
+    <div class="piece-slot" id="slot0"></div>
+    <div class="piece-slot" id="slot1"></div>
+    <div class="piece-slot" id="slot2"></div>
+  </div>
+</div>
+
+<div id="overlay">
+  <h1>خسرتي!</h1>
+  <p id="final-score">النقط: 0</p>
+  <button id="restart-btn">العب مرة أخرى</button>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var GRID = 8;
+  var COLORS = ["#ff5252", "#ffb300", "#4caf50", "#2196f3", "#9c27b0", "#00bcd4", "#ff7043"];
+
+  var SHAPES = [
+    [[1]],
+    [[1,1]],
+    [[1],[1]],
+    [[1,1,1]],
+    [[1],[1],[1]],
+    [[1,1],[1,1]],
+    [[1,1,1],[1,0,0]],
+    [[1,1,1],[0,0,1]],
+    [[1,0,0],[1,1,1]],
+    [[0,0,1],[1,1,1]],
+    [[1,1,1,1]],
+    [[1],[1],[1],[1]],
+    [[1,1,0],[0,1,1]],
+    [[0,1,1],[1,1,0]],
+    [[1,1],[1,0]],
+    [[1,1],[0,1]],
+    [[1,0],[1,1]],
+    [[0,1],[1,1]]
+  ];
+
+  var board = [];
+  var boardColors = [];
+  var score = 0;
+  var best = parseInt(localStorage.getItem("bp_best") || "0", 10);
+  var currentPieces = [null, null, null];
+  var cellSize = 0;
+
+  var boardEl = document.getElementById("board");
+  var scoreEl = document.getElementById("score-value");
+  var bestEl = document.getElementById("best-value");
+  var overlayEl = document.getElementById("overlay");
+  var finalScoreEl = document.getElementById("final-score");
+  var restartBtn = document.getElementById("restart-btn");
+  var slots = [document.getElementById("slot0"), document.getElementById("slot1"), document.getElementById("slot2")];
+
+  bestEl.textContent = best;
+
+  function initBoard() {
+    board = [];
+    boardColors = [];
+    for (var r = 0; r < GRID; r++) {
+      board.push(new Array(GRID).fill(0));
+      boardColors.push(new Array(GRID).fill(null));
+    }
+    boardEl.innerHTML = "";
+    for (var i = 0; i < GRID * GRID; i++) {
+      var cell = document.createElement("div");
+      cell.className = "cell";
+      cell.dataset.index = i;
+      boardEl.appendChild(cell);
+    }
+  }
+
+  function randomShape() {
+    var shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+    var color = COLORS[Math.floor(Math.random() * COLORS.length)];
+    return { shape: shape, color: color };
+  }
+
+  function refillTray() {
+    for (var i = 0; i < 3; i++) {
+      currentPieces[i] = randomShape();
+    }
+    renderTray();
+  }
+
+  function renderTray() {
+    for (var i = 0; i < 3; i++) {
+      var slotEl = slots[i];
+      slotEl.innerHTML = "";
+      var piece = currentPieces[i];
+      if (!piece) continue;
+      var rows = piece.shape.length;
+      var cols = piece.shape[0].length;
+      slotEl.style.gridTemplateColumns = "repeat(" + cols + ", 22px)";
+      slotEl.style.gridTemplateRows = "repeat(" + rows + ", 22px)";
+      for (var r = 0; r < rows; r++) {
+        for (var c = 0; c < cols; c++) {
+          var pc = document.createElement("div");
+          pc.className = "piece-cell" + (piece.shape[r][c] ? "" : " empty");
+          if (piece.shape[r][c]) pc.style.background = piece.color;
+          slotEl.appendChild(pc);
+        }
+      }
+      attachDrag(slotEl, i);
+    }
+  }
+
+  function getBoardRect() {
+    return boardEl.getBoundingClientRect();
+  }
+
+  function attachDrag(slotEl, pieceIndex) {
+    slotEl.onpointerdown = function (e) {
+      if (!currentPieces[pieceIndex]) return;
+      startDrag(e, pieceIndex, slotEl);
+    };
+  }
+
+  var dragState = null;
+
+  function startDrag(e, pieceIndex, slotEl) {
+    var piece = currentPieces[pieceIndex];
+    if (!piece) return;
+
+    var ghost = slotEl.cloneNode(true);
+    ghost.classList.add("dragging");
+    ghost.style.width = slotEl.offsetWidth + "px";
+    document.body.appendChild(ghost);
+
+    dragState = {
+      pieceIndex: pieceIndex,
+      piece: piece,
+      ghost: ghost,
+      slotEl: slotEl
+    };
+
+    slotEl.style.visibility = "hidden";
+    moveGhost(e.clientX, e.clientY);
+
+    document.onpointermove = function (ev) {
+      moveGhost(ev.clientX, ev.clientY);
+      highlightPreview(ev.clientX, ev.clientY);
+    };
+    document.onpointerup = function (ev) {
+      endDrag(ev.clientX, ev.clientY);
+    };
+  }
+
+  function moveGhost(x, y) {
+    if (!dragState) return;
+    var ghost = dragState.ghost;
+    var offsetY = 90;
+    ghost.style.left = (x - ghost.offsetWidth / 2) + "px";
+    ghost.style.top = (y - ghost.offsetHeight / 2 - offsetY) + "px";
+  }
+
+  function boardPosFromClient(x, y) {
+    var rect = getBoardRect();
+    var padding = 6, gap = 3;
+    var innerSize = rect.width - padding * 2;
+    var cs = (innerSize - gap * (GRID - 1)) / GRID;
+    var relX = x - rect.left - padding;
+    var relY = y - rect.top - padding - 90;
+    var col = Math.round(relX / (cs + gap) - dragState.piece.shape[0].length / 2 + 0.5);
+    var row = Math.round(relY / (cs + gap) - dragState.piece.shape.length / 2 + 0.5);
+    return { row: row, col: col };
+  }
+
+  function canPlace(shape, row, col) {
+    for (var r = 0; r < shape.length; r++) {
+      for (var c = 0; c < shape[r].length; c++) {
+        if (!shape[r][c]) continue;
+        var br = row + r, bc = col + c;
+        if (br < 0 || br >= GRID || bc < 0 || bc >= GRID) return false;
+        if (board[br][bc]) return false;
+      }
+    }
+    return true;
+  }
+
+  function clearPreview() {
+    var cells = boardEl.children;
+    for (var i = 0; i < cells.length; i++) {
+      if (!board[Math.floor(i / GRID)][i % GRID]) {
+        cells[i].style.background = "";
+        cells[i].style.opacity = "";
+      }
+    }
+  }
+
+  function highlightPreview(x, y) {
+    clearPreview();
+    if (!dragState) return;
+    var pos = boardPosFromClient(x, y);
+    var ok = canPlace(dragState.piece.shape, pos.row, pos.col);
+    var shape = dragState.piece.shape;
+    for (var r = 0; r < shape.length; r++) {
+      for (var c = 0; c < shape[r].length; c++) {
+        if (!shape[r][c]) continue;
+        var br = pos.row + r, bc = pos.col + c;
+        if (br >= 0 && br < GRID && bc >= 0 && bc < GRID && !board[br][bc]) {
+          var idx = br * GRID + bc;
+          boardEl.children[idx].style.background = ok ? dragState.piece.color : "#7a2b2b";
+          boardEl.children[idx].style.opacity = "0.55";
+        }
+      }
+    }
+    dragState.lastPos = pos;
+    dragState.lastOk = ok;
+  }
+
+  function endDrag(x, y) {
+    if (!dragState) return;
+    clearPreview();
+    var pos = dragState.lastPos || boardPosFromClient(x, y);
+    var placed = false;
+    if (canPlace(dragState.piece.shape, pos.row, pos.col)) {
+      placePiece(dragState.piece, pos.row, pos.col);
+      placed = true;
+    }
+
+    document.body.removeChild(dragState.ghost);
+    dragState.slotEl.style.visibility = "";
+    var pieceIndex = dragState.pieceIndex;
+    dragState = null;
+    document.onpointermove = null;
+    document.onpointerup = null;
+
+    if (placed) {
+      currentPieces[pieceIndex] = null;
+      renderTray();
+      if (currentPieces.every(function (p) { return p === null; })) {
+        refillTray();
+      }
+      checkGameOver();
+    }
+  }
+
+  function placePiece(piece, row, col) {
+    var shape = piece.shape;
+    for (var r = 0; r < shape.length; r++) {
+      for (var c = 0; c < shape[r].length; c++) {
+        if (!shape[r][c]) continue;
+        board[row + r][col + c] = 1;
+        boardColors[row + r][col + c] = piece.color;
+      }
+    }
+    renderBoard();
+    var cellsPlaced = shape.flat().filter(Boolean).length;
+    score += cellsPlaced;
+    clearFullLines();
+    updateScore();
+  }
+
+  function renderBoard() {
+    for (var r = 0; r < GRID; r++) {
+      for (var c = 0; c < GRID; c++) {
+        var idx = r * GRID + c;
+        var cell = boardEl.children[idx];
+        if (board[r][c]) {
+          cell.classList.add("filled");
+          cell.style.background = boardColors[r][c];
+        } else {
+          cell.classList.remove("filled");
+          cell.style.background = "";
+        }
+      }
+    }
+  }
+
+  function clearFullLines() {
+    var fullRows = [];
+    var fullCols = [];
+    for (var r = 0; r < GRID; r++) {
+      if (board[r].every(function (v) { return v === 1; })) fullRows.push(r);
+    }
+    for (var c = 0; c < GRID; c++) {
+      var full = true;
+      for (var r2 = 0; r2 < GRID; r2++) {
+        if (!board[r2][c]) { full = false; break; }
+      }
+      if (full) fullCols.push(c);
+    }
+
+    var totalLines = fullRows.length + fullCols.length;
+    if (totalLines === 0) return;
+
+    fullRows.forEach(function (r) {
+      for (var c = 0; c < GRID; c++) {
+        board[r][c] = 0;
+        boardColors[r][c] = null;
+      }
+    });
+    fullCols.forEach(function (c) {
+      for (var r = 0; r < GRID; r++) {
+        board[r][c] = 0;
+        boardColors[r][c] = null;
+      }
+    });
+
+    score += totalLines * GRID * 10 * (totalLines > 1 ? 1.5 : 1);
+    score = Math.round(score);
+    renderBoard();
+  }
+
+  function updateScore() {
+    scoreEl.textContent = score;
+    if (score > best) {
+      best = score;
+      bestEl.textContent = best;
+      localStorage.setItem("bp_best", best);
+    }
+  }
+
+  function checkGameOver() {
+    for (var i = 0; i < 3; i++) {
+      var piece = currentPieces[i];
+      if (!piece) continue;
+      if (canPieceFitAnywhere(piece.shape)) return;
+    }
+    if (currentPieces.every(function (p) { return p === null; })) return;
+    showGameOver();
+  }
+
+  function canPieceFitAnywhere(shape) {
+    for (var r = 0; r <= GRID - shape.length; r++) {
+      for (var c = 0; c <= GRID - shape[0].length; c++) {
+        if (canPlace(shape, r, c)) return true;
+      }
+    }
+    return false;
+  }
+
+  function showGameOver() {
+    finalScoreEl.textContent = "النقط: " + score;
+    overlayEl.style.display = "flex";
+  }
+
+  function restart() {
+    score = 0;
+    updateScore();
+    overlayEl.style.display = "none";
+    initBoard();
+    refillTray();
+  }
+
+  restartBtn.onclick = restart;
+
+  initBoard();
+  refillTray();
+})();
+</script>
+</body>
+</html>
